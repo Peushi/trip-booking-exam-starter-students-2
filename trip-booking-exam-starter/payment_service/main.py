@@ -81,7 +81,16 @@ async def authorize_payment(request: PaymentAuthorizationRequest) -> dict:
 @app.post("/payments/{payment_id}/cancel")
 async def cancel_payment(payment_id: UUID) -> dict:
     row = await db.get_pool().fetchrow(
-        "UPDATE payment_authorizations SET status = 'CANCELLED' WHERE id = $1 RETURNING *",
+        
+        """
+        UPDATE payment_authorizations 
+        SET status = CASE
+            WHEN status IN ('CANCELLED', 'DECLINED') THEN status
+            ELSE 'CANCELLED'
+        END
+        WHERE id = $1 
+        RETURNING *
+        """,
         payment_id,
     )
     if row is None:
