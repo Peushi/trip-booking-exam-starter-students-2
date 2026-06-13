@@ -100,13 +100,13 @@ async def cancel_reservation(reservation_id: UUID) -> dict:
     pool = db.get_pool()
 
     async with pool.acquire() as conn:
-        async with conn.transation():
+        async with conn.transaction():
             reservation = await conn.fetchrow(
                 "SELECT * FROM hotel_reservations WHERE id = $1 FOR UPDATE",
                 reservation_id
             )
             if reservation is None:
-                raise HTTPException(status_code=404, detail="Hotel reservation is not found")
+                raise HTTPException(status_code=404, detail="Hotel reservation not found")
             
             if reservation["status"] == "CANCELLED":
                 return dict(reservation)
