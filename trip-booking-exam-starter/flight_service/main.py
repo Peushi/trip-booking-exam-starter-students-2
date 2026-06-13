@@ -70,28 +70,37 @@ async def book_flight(flight_id: str, request: FlightBookingRequest) -> dict:
 
     await maybe_delay(request.delay_after_check_ms)
 
-    await pool.execute(
-        "UPDATE flights SET seats_available = seats_available - $1 WHERE id = $2",
-        request.seats,
-        flight_id,
-    )
-
-    if request.fail_after_decrement:
-        raise HTTPException(status_code=500, detail="Forced failure after decrement")
-
+    # the inventory decrement and the booking row insertion are in a single transaction. 
     booking_id = uuid4()
-    booking = await pool.fetchrow(
-        """
-        INSERT INTO flight_bookings (id, trip_id, flight_id, traveler_name, seats, status)
-        VALUES ($1, $2, $3, $4, $5, 'CONFIRMED')
-        RETURNING *
-        """,
-        booking_id,
-        request.trip_id,
-        flight_id,
-        request.traveler_name,
-        request.seats,
-    )
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            result = await conn.execute(
+                """
+                UPDATE flights
+                SET seats_available = seats_available - $1, version = version + 1
+                WHERE id = $2 AND version = $3
+                """,
+                request.seats,
+                flight_id,
+                flight["version"],
+            )
+            updated_count = int(result.split()[-1])
+            if updated_count == 0:
+                raise HTTPException(status_code=409, detail="Booking conflict, please retry")
+            if request.fail_after_decrement:
+                raise HTTPException(status_code=500, detail="Forced failure after decrement")
+            booking = await conn.fetchrow(
+                """
+                INSERT INTO flight_bookings (id, trip_id, flight_id, traveler_name, seats, status)
+                VALUES ($1, $2, $3, $4, $5, 'CONFIRMED')
+                RETURNING *
+                """,
+                booking_id,
+                request.trip_id,
+                flight_id,
+                request.traveler_name,
+                request.seats,
+            )
     return dict(booking)
 
 

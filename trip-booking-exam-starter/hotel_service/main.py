@@ -72,26 +72,31 @@ async def reserve_hotel(hotel_id: str, request: HotelReservationRequest) -> dict
         raise HTTPException(status_code=409, detail="Not enough rooms available")
 
     await maybe_delay(request.delay_after_check_ms)
-
-    await pool.execute(
-        "UPDATE hotels SET rooms_available = rooms_available - $1 WHERE id = $2",
-        request.rooms,
-        hotel_id,
-    )
     reservation_id = uuid4()
-    reservation = await pool.fetchrow(
-        """
-        INSERT INTO hotel_reservations (id, trip_id, hotel_id, traveler_name, nights, rooms, status)
-        VALUES ($1, $2, $3, $4, $5, $6, 'CONFIRMED')
-        RETURNING *
-        """,
-        reservation_id,
-        request.trip_id,
-        hotel_id,
-        request.traveler_name,
-        request.nights,
-        request.rooms,
-    )
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            result =await conn.execute(
+                "UPDATE hotels SET rooms_available = rooms_available - $1, version = version + 1 WHERE id = $2 AND version = $3",
+                request.rooms,
+                hotel_id,
+                hotel["version"]
+            )
+            updated_count = int(result.split()[-1])
+            if updated_count == 0:
+                raise HTTPException(status_code=409, detail="Booking conflict, please retry")
+            reservation = await conn.fetchrow(
+                """
+                INSERT INTO hotel_reservations (id, trip_id, hotel_id, traveler_name, nights, rooms, status)
+                VALUES ($1, $2, $3, $4, $5, $6, 'CONFIRMED')
+                RETURNING *
+                """,
+                reservation_id,
+                request.trip_id,
+                hotel_id,
+                request.traveler_name,
+                request.nights,
+                request.rooms,
+            )
     return dict(reservation)
 
 
