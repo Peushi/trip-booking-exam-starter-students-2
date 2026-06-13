@@ -124,8 +124,9 @@ Do not assume the starter app is correct. Its flaws are the point of the exercis
 
 ## Exam refactor
 
-| Concept | Category | Main files modified | How to test it |
-|---|---|---|---|
-| Optimistic locking | A2 | `flight_service/main.py`, `flight_service/db.py`, `hotel_service/main.py`, `hotel_service/db.py` | `docker compose run --rm tools pytest tests/test_optimistic_locking.py -v` |
+| Concept                                      | Category | Main files modified                                                                                                                                | How to test it                                                                                                    |
+| -------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Optimistic locking                           | A2       | `flight_service/main.py`, `flight_service/db.py`, `hotel_service/main.py`, `hotel_service/db.py`                                                   | `docker compose run --rm tools pytest tests/test_optimistic_locking.py -v`                                        |
+| Durable saga state machine with compensation | B        | `trip_service/main.py`, `trip_service/clients.py`, `payment_service/main.py`, `tests/test_intentional_flaws.py`, `scripts/demo_partial_failure.py` | `docker compose run --rm tools python scripts/demo_partial_failure.py` and `docker compose run --rm tools pytest` |
 
 AI assistance was used for debugging, documentation and for writing tests
