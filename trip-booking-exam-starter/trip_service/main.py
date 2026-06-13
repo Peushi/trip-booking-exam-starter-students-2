@@ -61,6 +61,57 @@ async def get_trip(trip_id: UUID) -> dict:
 
 
 # changes made for CATEGORY-C(idempotency)
+
+# COMPENSATION HELPER FOR THE SAGA
+async def compensate_trip(trip_id: UUID, original_error: Exception) -> dict:
+    trip = await db.update_trip(
+        trip_id,
+        status="COMPENSATING",
+        error_message=str(original_error),
+    )
+
+    compensation_errors: list[str] = []
+
+    if trip.get("payment_authorization_id") is not None:
+        try:
+            await clients.cancel_payment(payment_id=str(trip["payment_authorization_id"]))
+        except Exception as exc:
+            logging.exception("Payment compensation failed")
+            compensation_errors.append(f"payment compensation failed: {exc}")
+
+    if trip.get("hotel_reservation_id") is not None:
+        try:
+            await clients.cancel_hotel_reservation(reservation_id=str(trip["hotel_reservation_id"]))
+        except Exception as exc:
+            logging.exception("Hotel compensation failed")
+            compensation_errors.append(f"hotel compensation failed: {exc}")
+
+    if trip.get("flight_booking_id") is not None:
+        try:
+            await clients.cancel_flight_booking(booking_id=str(trip["flight_booking_id"]))
+        except Exception as exc:
+            logging.exception("Flight compensation failed")
+            compensation_errors.append(f"flight compensation failed: {exc}")
+    
+    if compensation_errors:
+        return await db.update_trip(
+            trip_id,
+            status="COMPENSATION_FAILED",
+            error_message=str(original_error) + " | " + " | ".join(compensation_errors),
+        )
+    
+    return await db.update_trip(
+        trip_id,
+        status="CANCELLED",
+        error_message=str(original_error)
+    )
+
+
+# after each successful remote call, the trip row is updated durably
+# FLIGHT_BOOKED + flight_booking_id
+# HOTEL_RESERVED + hotel_reservation_id
+# PAYMENT_AUTHORIZED + payment_authorization_id
+
 @app.post("/trips")
 async def create_trip(
     request: CreateTripRequest,
@@ -110,9 +161,6 @@ async def create_trip(
         )
         trip_id = trip["id"]
 
-        # INTENTIONAL NAIVE DESIGN[cite: 12]:
-        # This is a plain sequence of remote calls. There is no saga state
-        # machine, compensation, TCC, 2PC, retry policy, or idempotency key
         flight_booking = await clients.book_flight(
             flight_id=request.flight_id,
             trip_id=str(trip_id),
@@ -120,7 +168,10 @@ async def create_trip(
             delay_after_check_ms=request.simulate.flight_delay_after_check_ms,
         )
         trip = await db.update_trip(
-            trip_id, flight_booking_id=UUID(flight_booking["id"])
+            trip_id, 
+            flight_booking_id=UUID(flight_booking["id"]),
+            status="FLIGHT_BOOKED",
+            error_message=None,
         )
 
         hotel_reservation = await clients.reserve_hotel(
@@ -132,7 +183,10 @@ async def create_trip(
             force_fail=request.simulate.hotel_force_fail,
         )
         trip = await db.update_trip(
-            trip_id, hotel_reservation_id=UUID(hotel_reservation["id"])
+            trip_id, 
+            hotel_reservation_id=UUID(hotel_reservation["id"]),
+            status="HOTEL_RESERVED",
+            error_message=None,
         )
 
         # Safely retrieve service inventory configurations and evaluate pricing rules
@@ -143,7 +197,11 @@ async def create_trip(
             hotel_price_per_night_cents=hotel["price_per_night_cents"],
             nights=request.nights,
         )
-        trip = await db.update_trip(trip_id, amount_cents=amount_cents)
+        trip = await db.update_trip(
+            trip_id, 
+            amount_cents=amount_cents,
+            error_message=None,
+        )
 
         payment = await clients.authorize_payment(
             trip_id=str(trip_id),
@@ -155,6 +213,12 @@ async def create_trip(
         trip = await db.update_trip(
             trip_id,
             payment_authorization_id=UUID(payment["id"]),
+            status="PAYMENT_AUTHORIZED",
+            error_message=None,
+        )
+
+        trip = await db.update_trip(
+            trip_id,
             status="CONFIRMED",
             error_message=None,
         )
@@ -164,22 +228,17 @@ async def create_trip(
         await db.save_idempotency_complete(x_idempotency_key, 201, stringified_trip)
 
     except Exception as exc:
-        #RECOVERY CLEANUP: Drop request token if internal steps crash so client can retry safely
+        # RECOVERY CLEANUP: Drop request token if internal steps crash so client can retry safely
         await db.remove_idempotency(x_idempotency_key)
-
-        try:
-            failed = await db.update_trip(
-                trip_id, status="FAILED", error_message=str(exc)
-            )
-            error_msg = failed["error_message"]
-        except Exception:
-            error_msg = str(exc)
-
+        
+        # SAGA COMPENSATION
+        compensated = await compensate_trip(trip_id, exc)
         raise HTTPException(
-            status_code=502,
+            status_code=502, 
             detail={
-                "trip_id": str(trip_id) if "trip_id" in locals() else "None",
-                "error": error_msg,
+                "trip_id": str(trip_id), 
+                "status": compensated["status"],
+                "error": compensated["error_message"],
             },
         )
 
@@ -188,9 +247,6 @@ async def create_trip(
             trip, publish_twice=request.simulate.publish_event_twice
         )
     except Exception:
-        # INTENTIONAL NAIVE DESIGN[cite: 12]
-        logging.exception(
-            "Failed to publish confirmation event. This is a bug in the trip service."
-        )
+        logging.exception("Failed to publish trip.confirmed event")
 
     return trip

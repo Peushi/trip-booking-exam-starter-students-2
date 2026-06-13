@@ -72,46 +72,59 @@ async def reserve_hotel(hotel_id: str, request: HotelReservationRequest) -> dict
         raise HTTPException(status_code=409, detail="Not enough rooms available")
 
     await maybe_delay(request.delay_after_check_ms)
-
-    await pool.execute(
-        "UPDATE hotels SET rooms_available = rooms_available - $1 WHERE id = $2",
-        request.rooms,
-        hotel_id,
-    )
     reservation_id = uuid4()
-    reservation = await pool.fetchrow(
-        """
-        INSERT INTO hotel_reservations (id, trip_id, hotel_id, traveler_name, nights, rooms, status)
-        VALUES ($1, $2, $3, $4, $5, $6, 'CONFIRMED')
-        RETURNING *
-        """,
-        reservation_id,
-        request.trip_id,
-        hotel_id,
-        request.traveler_name,
-        request.nights,
-        request.rooms,
-    )
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            result =await conn.execute(
+                "UPDATE hotels SET rooms_available = rooms_available - $1, version = version + 1 WHERE id = $2 AND version = $3",
+                request.rooms,
+                hotel_id,
+                hotel["version"]
+            )
+            updated_count = int(result.split()[-1])
+            if updated_count == 0:
+                raise HTTPException(status_code=409, detail="Booking conflict, please retry")
+            reservation = await conn.fetchrow(
+                """
+                INSERT INTO hotel_reservations (id, trip_id, hotel_id, traveler_name, nights, rooms, status)
+                VALUES ($1, $2, $3, $4, $5, $6, 'CONFIRMED')
+                RETURNING *
+                """,
+                reservation_id,
+                request.trip_id,
+                hotel_id,
+                request.traveler_name,
+                request.nights,
+                request.rooms,
+            )
     return dict(reservation)
 
 
 @app.post("/hotel-reservations/{reservation_id}/cancel")
 async def cancel_reservation(reservation_id: UUID) -> dict:
     pool = db.get_pool()
-    reservation = await pool.fetchrow("SELECT * FROM hotel_reservations WHERE id = $1", reservation_id)
-    if reservation is None:
-        raise HTTPException(status_code=404, detail="Hotel reservation not found")
 
-    # INTENTIONAL NAIVE DESIGN:
-    # Cancellation is not idempotent; calling this twice increments rooms twice.
-    updated = await pool.fetchrow(
-        "UPDATE hotel_reservations SET status = 'CANCELLED' WHERE id = $1 RETURNING *",
-        reservation_id,
-    )
-    await pool.execute(
-        "UPDATE hotels SET rooms_available = rooms_available + $1 WHERE id = $2",
-        reservation["rooms"],
-        reservation["hotel_id"],
-    )
-    return dict(updated)
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            reservation = await conn.fetchrow(
+                "SELECT * FROM hotel_reservations WHERE id = $1 FOR UPDATE",
+                reservation_id
+            )
+            if reservation is None:
+                raise HTTPException(status_code=404, detail="Hotel reservation not found")
+            
+            if reservation["status"] == "CANCELLED":
+                return dict(reservation)
+
+
+            updated = await conn.fetchrow(
+                "UPDATE hotel_reservations SET status = 'CANCELLED' WHERE id = $1 RETURNING *",
+                reservation_id,
+            )
+            await conn.execute(
+                "UPDATE hotels SET rooms_available = rooms_available + $1 WHERE id = $2",
+                reservation["rooms"],
+                reservation["hotel_id"],
+            )
+            return dict(updated)
 

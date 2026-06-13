@@ -103,3 +103,23 @@ async def authorize_payment(
         },
     )
 
+
+async def cancel_flight_booking(*, booking_id: str) -> dict[str, Any]:
+    return await _request(
+        "POST",
+        f"{flight_service_url()}/flight-bookings/{booking_id}/cancel",
+    )
+
+
+async def cancel_hotel_reservation(*, reservation_id: str) -> dict[str, Any]:
+    return await _request(
+        "POST",
+        f"{hotel_service_url()}/hotel-reservations/{reservation_id}/cancel",
+    )
+
+
+async def cancel_payment(*, payment_id: str) -> dict[str, Any]:
+    return await _request(
+        "POST",
+        f"{payment_service_url()}/payments/{payment_id}/cancel",
+    )
