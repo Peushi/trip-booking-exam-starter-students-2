@@ -1,0 +1,155 @@
+x-api-healthcheck: &api-healthcheck
+  test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).read()"]
+  interval: 5s
+  timeout: 5s
+  retries: 20
+  start_period: 5s
+
+services:
+  tools:
+    image: trip-booking-exam-starter-app
+    build: .
+    profiles:
+      - tools
+    command: python scripts/smoke_success.py
+    environment:
+      TRIP_URL: http://trip-service:8000
+      FLIGHT_URL: http://flight-service:8000
+      HOTEL_URL: http://hotel-service:8000
+      PAYMENT_URL: http://payment-service:8000
+      NOTIFICATION_URL: http://notification-api:8000
+    depends_on:
+      trip-service:
+        condition: service_healthy
+      flight-service:
+        condition: service_healthy
+      hotel-service:
+        condition: service_healthy
+      payment-service:
+        condition: service_healthy
+      notification-api:
+        condition: service_healthy
+      notification-worker:
+        condition: service_started
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  flight-service:
+    image: trip-booking-exam-starter-app
+    build: .
+    command: uvicorn flight_service.main:app --host 0.0.0.0 --port 8000
+    environment:
+      FLIGHT_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/flight_db
+    ports:
+      - "8001:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck: *api-healthcheck
+
+  hotel-service:
+    image: trip-booking-exam-starter-app
+    build: .
+    command: uvicorn hotel_service.main:app --host 0.0.0.0 --port 8000
+    environment:
+      HOTEL_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/hotel_db
+    ports:
+      - "8002:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck: *api-healthcheck
+
+  payment-service:
+    image: trip-booking-exam-starter-app
+    build: .
+    command: uvicorn payment_service.main:app --host 0.0.0.0 --port 8000
+    environment:
+      PAYMENT_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/payment_db
+    ports:
+      - "8003:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck: *api-healthcheck
+
+  notification-api:
+    image: trip-booking-exam-starter-app
+    build: .
+    command: uvicorn notification_api.main:app --host 0.0.0.0 --port 8000
+    environment:
+      NOTIFICATION_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/notification_db
+    ports:
+      - "8004:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck: *api-healthcheck
+
+  notification-worker:
+    image: trip-booking-exam-starter-app
+    build: .
+    command: python -m notification_worker.worker
+    restart: unless-stopped
+    environment:
+      NOTIFICATION_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/notification_db
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      CRASH_ONCE_AFTER_INSERT_BEFORE_ACK: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  trip-service:
+    image: trip-booking-exam-starter-app
+    build: .
+    command: uvicorn trip_service.main:app --host 0.0.0.0 --port 8000
+    environment:
+      TRIP_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/trip_db
+      FLIGHT_SERVICE_URL: http://flight-service:8000
+      HOTEL_SERVICE_URL: http://hotel-service:8000
+      PAYMENT_SERVICE_URL: http://payment-service:8000
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      flight-service:
+        condition: service_healthy
+      hotel-service:
+        condition: service_healthy
+      payment-service:
+        condition: service_healthy
+    healthcheck: *api-healthcheck
+
+volumes:
+  postgres-data:
