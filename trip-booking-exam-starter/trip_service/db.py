@@ -59,6 +59,18 @@ async def init_db() -> None:
         )
         """
     )
+   # changes made for CATEGORY-C ( table made to store idempotency keys for each user to avoid duplicate trip creation  )
+
+    await get_pool().execute(
+        """
+        CREATE TABLE IF NOT EXISTS idempotency_keys (
+            user_key TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            saved_code INTEGER,
+            saved_body TEXT
+        )
+        """ 
+    )
 
 
 async def reset_db() -> None:
@@ -112,3 +124,17 @@ async def state() -> dict[str, list[dict]]:
     rows = await get_pool().fetch("SELECT * FROM trips ORDER BY created_at, id")
     return {"trips": [dict(row) for row in rows]}
 
+
+
+
+#  changes made for CATEFORY-C (asynchronous function to check if the idempotency key already exists in the database for a given user_key)
+
+async def get_idempotency_pending(key: str) ->  None:
+    await get_pool().execute("INSERT INTO idempotency_keys (user_key, status) VALUES ($1, 'PENDING') ", key )
+
+async def save_idempotency_complete(key: str, code: int, body: str ) ->  None:
+    await get_pool().execute("UPDATE idempotency_keys SET status = 'COMPLETED' , saved_code = $1 , saved_body = $2 WHERE user_key = $3 ", code, body, key )
+
+async def  remove_idempotency(key: str)-> None:
+    await get_pool().execute("DELETE FROM idempotency_keys WHERE user_key = $1 ", key )
+    
