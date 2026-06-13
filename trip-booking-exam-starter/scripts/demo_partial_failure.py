@@ -6,8 +6,9 @@ def main() -> None:
     response = create_trip(base_trip_payload(payment_force_decline=True))
 
     print("Payment failed after flight and hotel succeeded.")
-    print("The trip is FAILED, but resources remain reserved.")
-    print("This demonstrates the need for a saga, TCC, or another recovery mechanism.")
+    print("The saga compensated the completed steps.")
+    print("The trip is CANCELLED, and flight/hotel resources were released.")
+    print("This demonstrates a durable saga state machine with compensation.")  
     print("Trip response:")
     print(pretty(response.json()))
     print("State:")
