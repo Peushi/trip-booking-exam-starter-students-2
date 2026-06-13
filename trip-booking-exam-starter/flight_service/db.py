@@ -45,8 +45,8 @@ async def init_db() -> None:
             origin TEXT NOT NULL,
             destination TEXT NOT NULL,
             departure_date TEXT NOT NULL,
-            seats_available INTEGER NOT NULL,
-            price_cents INTEGER NOT NULL
+            seats_available INTEGER NOT NULL CHECK (seats_available >= 0),
+            price_cents INTEGER NOT NULL CHECK (price_cents > 0)
         )
         """
     )
@@ -57,7 +57,7 @@ async def init_db() -> None:
             trip_id UUID NOT NULL,
             flight_id TEXT NOT NULL,
             traveler_name TEXT NOT NULL,
-            seats INTEGER NOT NULL,
+            seats INTEGER NOT NULL CHECK (seats > 0),
             status TEXT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )

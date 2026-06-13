@@ -44,8 +44,8 @@ async def init_db() -> None:
             id TEXT PRIMARY KEY,
             city TEXT NOT NULL,
             name TEXT NOT NULL,
-            rooms_available INTEGER NOT NULL,
-            price_per_night_cents INTEGER NOT NULL
+            rooms_available INTEGER NOT NULL CHECK (rooms_available >=0),
+            price_per_night_cents INTEGER NOT NULL CHECK (price_per_night_cents > 0)
         )
         """
     )
@@ -56,8 +56,8 @@ async def init_db() -> None:
             trip_id UUID NOT NULL,
             hotel_id TEXT NOT NULL,
             traveler_name TEXT NOT NULL,
-            nights INTEGER NOT NULL,
-            rooms INTEGER NOT NULL,
+            nights INTEGER NOT NULL CHECK (nights > 0),
+            rooms INTEGER NOT NULL CHECK (rooms > 0),
             status TEXT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )
