@@ -39,6 +39,7 @@ async def close() -> None:
 
 
 async def init_db() -> None:
+    # 1. Original system trips table definition[cite: 10]
     await get_pool().execute(
         """
         CREATE TABLE IF NOT EXISTS trips (
@@ -59,15 +60,15 @@ async def init_db() -> None:
         )
         """
     )
-   # changes made for CATEGORY-C ( table made to store idempotency keys for each user to avoid duplicate trip creation  )
 
+    # changes made for CATEGORY-C(idempotency key table made if not exists)
     await get_pool().execute(
         """
         CREATE TABLE IF NOT EXISTS idempotency_keys (
             user_key TEXT PRIMARY KEY,
-            status TEXT NOT NULL,
+            status TEXT NOT NULL,       
             saved_code INTEGER,
-            saved_body TEXT
+            saved_body TEXT          
         )
         """ 
     )
@@ -125,16 +126,36 @@ async def state() -> dict[str, list[dict]]:
     return {"trips": [dict(row) for row in rows]}
 
 
+#changes made for CATEGORY-C(Asynchronous database helper utilities)
+
+async def get_idempotency(key: str) -> dict | None:
+    """Queries the database to find out if this user key has been seen before."""
+    row = await get_pool().fetchrow(
+        "SELECT user_key, status, saved_code, saved_body FROM idempotency_keys WHERE user_key = $1", 
+        key
+    )
+    return dict(row) if row else None
 
 
-#  changes made for CATEFORY-C (asynchronous function to check if the idempotency key already exists in the database for a given user_key)
+async def save_idempotency_pending(key: str) -> None:
+    """Inserts a fresh row with PENDING status to reserve the execution path lock."""
+    await get_pool().execute(
+        "INSERT INTO idempotency_keys (user_key, status) VALUES ($1, 'PENDING')", 
+        key
+    )
 
-async def get_idempotency_pending(key: str) ->  None:
-    await get_pool().execute("INSERT INTO idempotency_keys (user_key, status) VALUES ($1, 'PENDING') ", key )
 
-async def save_idempotency_complete(key: str, code: int, body: str ) ->  None:
-    await get_pool().execute("UPDATE idempotency_keys SET status = 'COMPLETED' , saved_code = $1 , saved_body = $2 WHERE user_key = $3 ", code, body, key )
+async def save_idempotency_complete(key: str, code: int, body: str) -> None:
+    """Saves the final response payload to the cache record upon completion."""
+    await get_pool().execute(
+        "UPDATE idempotency_keys SET status = 'COMPLETED', saved_code = $1, saved_body = $2 WHERE user_key = $3", 
+        code, body, key
+    )
 
-async def  remove_idempotency(key: str)-> None:
-    await get_pool().execute("DELETE FROM idempotency_keys WHERE user_key = $1 ", key )
-    
+
+async def remove_idempotency(key: str) -> None:
+    """Deletes the log row entirely if the internal booking process drops dead."""
+    await get_pool().execute(
+        "DELETE FROM idempotency_keys WHERE user_key = $1", 
+        key
+    )
