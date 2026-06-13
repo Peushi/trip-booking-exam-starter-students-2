@@ -127,5 +127,5 @@ Do not assume the starter app is correct. Its flaws are the point of the exercis
 | Concept | Category | Main files modified | How to test it |
 |---|---|---|---|
 | Optimistic locking | A2 | `flight_service/main.py`, `flight_service/db.py`, `hotel_service/main.py`, `hotel_service/db.py` | `docker compose run --rm tools pytest tests/test_optimistic_locking.py -v` |
-| Idempotency | C | `trip_service/main.py`, `trip_service/db.py`,`scripts/demo_duplicate_request.py` | `docker compose run --rm tools pytest tests/test_idempotency.py -v` |
+| Idempotency | C | `trip_service/main.py`, `trip_service/db.py`,`scripts/demo_duplicate_request.py` | `docker compose run --rm tools python scripts/demo_duplicate_request.py` |
 AI assistance was used for debugging, documentation and for writing tests
