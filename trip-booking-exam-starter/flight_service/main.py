@@ -74,15 +74,21 @@ async def book_flight(flight_id: str, request: FlightBookingRequest) -> dict:
     booking_id = uuid4()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await conn.execute(
-                "UPDATE flights SET seats_available = seats_available - $1 WHERE id = $2",
+            result = await conn.execute(
+                """
+                UPDATE flights
+                SET seats_available = seats_available - $1, version = version + 1
+                WHERE id = $2 AND version = $3
+                """,
                 request.seats,
                 flight_id,
+                flight["version"],
             )
-            #automatic rollback
+            updated_count = int(result.split()[-1])
+            if updated_count == 0:
+                raise HTTPException(status_code=409, detail="Booking conflict, please retry")
             if request.fail_after_decrement:
                 raise HTTPException(status_code=500, detail="Forced failure after decrement")
-            
             booking = await conn.fetchrow(
                 """
                 INSERT INTO flight_bookings (id, trip_id, flight_id, traveler_name, seats, status)
